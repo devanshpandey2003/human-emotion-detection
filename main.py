@@ -1,4 +1,5 @@
 import tensorflow as tf
+from keras.layers import Resizing, Rescaling
 import matplotlib.pyplot as plt
 
 train_directory = "kaggle/train"
@@ -54,3 +55,14 @@ for images, labels in train_dataset.take(1):
 
 training_dataset = train_dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
 validation_dataset = val_dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
+
+
+resize_rescale_layers = tf.keras.Sequential(
+    [
+        Resizing(CONFIGURATION["IM_SIZE"], CONFIGURATION["IM_SIZE"]),
+        Rescaling(1.0 / 255),
+    ]
+)
+
+
+# Modeling
