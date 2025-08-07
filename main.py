@@ -160,3 +160,29 @@ history = lenet_model.fit(
     epochs=CONFIGURATION["N_EPOCHS"],
     verbose=1,
 )
+
+lenet_model.save("lenet_model.h5")
+
+plt.plot(history.history["loss"])
+plt.plot(history.history["val_loss"])
+plt.title("Model Loss")
+plt.ylabel("Loss")
+plt.xlabel("Epoch")
+plt.legend(["train_loss", "val_loss"])
+plt.show()
+
+# from here
+
+lenet_model.evaluate(validation_dataset)
+
+test_image = cv2.imread("kaggle\test\happy\PrivateTest_218533.jpg")
+im = tf.constant(test_image, dtype=tf.float32)
+
+im = tf.expand_dims(im, axis=0)
+
+print(lenet_model(im))
+
+
+from tensorflow.keras.models import load_model
+
+lenet_model = load_model("lenet_model.h5")
