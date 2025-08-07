@@ -16,6 +16,9 @@ import matplotlib.pyplot as plt
 from tensorflow.keras.metrics import CategoricalAccuracy, TopKCategoricalAccuracy
 from tensorflow.keras.losses import CategoricalCrossentropy
 
+import matplotlib.pyplot as plt
+import cv2
+
 train_directory = "kaggle/train"
 val_directory = "kaggle/test"
 CLASS_NAMES = ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"]
@@ -94,8 +97,8 @@ resize_rescale_layers = tf.keras.Sequential(
 
 lenet_model = tf.keras.Sequential(
     [
-        InputLayer(shape=(CONFIGURATION["IM_SIZE"], CONFIGURATION["IM_SIZE"], 3)),
-        Rescaling(1.0 / 255, name="rescaling"),
+        InputLayer(shape=(None, None, 3)),
+        resize_rescale_layers,
         Conv2D(
             filters=CONFIGURATION["N_FILTERS"],
             kernel_size=CONFIGURATION["KERNEL_SIZE"],
@@ -133,7 +136,7 @@ lenet_model = tf.keras.Sequential(
             kernel_regularizer=L2(CONFIGURATION["REGULARIZATION_RATE"]),
         ),
         BatchNormalization(),
-        Dense(CONFIGURATION["NUM_CLASSES"], activation="sofmax"),
+        Dense(CONFIGURATION["NUM_CLASSES"], activation="softmax"),
     ]
 )
 
@@ -184,5 +187,8 @@ print(lenet_model(im))
 
 
 from tensorflow.keras.models import load_model
+from tensorflow.keras.layers import Resizing, Rescaling
 
-lenet_model = load_model("lenet_model.h5")
+lenet_model = load_model(
+    "lenet_model.h5", custom_objects={"Resizing": Resizing, "Rescaling": Rescaling}
+)
