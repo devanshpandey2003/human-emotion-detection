@@ -1,0 +1,118 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Emotion Recognition API</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .container { text-align: center; }
+        video, canvas { border: 2px solid #ddd; border-radius: 10px; margin: 10px; }
+        button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; }
+        .results { margin-top: 20px; text-align: left; }
+        .face-box { border: 2px solid #00ff00; position: absolute; }
+        .emotion-label { background: rgba(0,255,0,0.8); color: white; padding: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Emotion Recognition</h1>
+        <video id="video" width="640" height="480" autoplay></video>
+        <canvas id="canvas" width="640" height="480" style="display: none;"></canvas>
+        <br>
+        <button onclick="startCamera()">Start Camera</button>
+        <button onclick="captureAndPredict()">Capture & Analyze</button>
+        <button onclick="stopCamera()">Stop Camera</button>
+        <div id="results" class="results"></div>
+    </div>
+
+    <script>
+        let video = document.getElementById('video');
+        let canvas = document.getElementById('canvas');
+        let ctx = canvas.getContext('2d');
+        let stream = null;
+
+        async function startCamera() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = stream;
+            } catch (err) {
+                console.error('Error accessing camera:', err);
+                alert('Error accessing camera: ' + err.message);
+            }
+        }
+
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+            }
+        }
+
+        async function captureAndPredict() {
+            // Draw video frame to canvas
+            ctx.drawImage(video, 0, 0, 640, 480);
+            
+            // Convert canvas to base64
+            let imageData = canvas.toDataURL('image/jpeg');
+            
+            // Send to server for prediction
+            try {
+                let response = await fetch('/predict', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ image: imageData })
+                });
+                
+                let result = await response.json();
+                displayResults(result);
+            } catch (err) {
+                console.error('Error predicting:', err);
+                alert('Error predicting: ' + err.message);
+            }
+        }
+
+        function displayResults(result) {
+            let resultsDiv = document.getElementById('results');
+            
+            if (result.success) {
+                if (result.results && result.results.length > 0) {
+                    let html = '<h3>Detected Emotions:</h3>';
+                    result.results.forEach((face, index) => {
+                        html += `<div style="border: 1px solid #ddd; padding: 10px; margin: 10px 0;">`;
+                        html += `<h4>Face ${index + 1}: ${face.emotion} (${(face.confidence * 100).toFixed(1)}%)</h4>`;
+                        html += `<p>Position: (${face.x}, ${face.y}) - ${face.width}x${face.height}</p>`;
+                        html += '<h5>All Predictions:</h5><ul>';
+                        for (let [emotion, confidence] of Object.entries(face.all_predictions)) {
+                            html += `<li>${emotion}: ${(confidence * 100).toFixed(1)}%</li>`;
+                        }
+                        html += '</ul></div>';
+                    });
+                    resultsDiv.innerHTML = html;
+                } else {
+                    let debugInfo = result.debug_info ? 
+                        `<p><strong>Debug Info:</strong> Image shape: ${result.debug_info.image_shape}, Faces detected: ${result.debug_info.faces_detected}</p>` : '';
+                    resultsDiv.innerHTML = `
+                        <div style="background: #f0f0f0; padding: 15px; border-radius: 5px;">
+                            <h3>No faces detected</h3>
+                            <p>Tips to improve detection:</p>
+                            <ul>
+                                <li>Ensure your face is well-lit</li>
+                                <li>Look directly at the camera</li>
+                                <li>Move closer to the camera</li>
+                                <li>Remove any obstructions (glasses, hair, etc.)</li>
+                            </ul>
+                            ${debugInfo}
+                        </div>
+                    `;
+                }
+            } else {
+                resultsDiv.innerHTML = `<div style="background: #ffebee; color: #c62828; padding: 15px; border-radius: 5px;">
+                    <h3>Error:</h3><p>${result.error}</p>
+                </div>`;
+            }
+        }
+    </script>
+</body>
+</html>
