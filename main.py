@@ -9,15 +9,24 @@ from tensorflow.keras.layers import (
     Dense,
     Resizing,
     Rescaling,
+    RandomContrast,
+    RandomRotation,
+    RandomFlip,
 )
 from tensorflow.keras.regularizers import L2
 import matplotlib.pyplot as plt
+
+from tensorflow.keras.models import load_model
+from tensorflow.keras.layers import Resizing, Rescaling
 
 from tensorflow.keras.metrics import CategoricalAccuracy, TopKCategoricalAccuracy
 from tensorflow.keras.losses import CategoricalCrossentropy
 
 import matplotlib.pyplot as plt
 import cv2
+import numpy as np
+from sklearn.metrics import confusion_matrix
+import tensorflow_probability as tfp
 
 train_directory = "kaggle/train"
 val_directory = "kaggle/test"
@@ -78,10 +87,140 @@ for images, labels in train_dataset.take(1):
         plt.title(CLASS_NAMES[tf.argmax(labels[i])])
         plt.axis("off")
 
+# Data Augmentation
+
+
+augment_layers = tf.keras.Sequential(
+    [
+        RandomRotation(factor=(-0.025, 0.025)),
+        RandomFlip(mode="horizontal"),
+        RandomContrast(factor=0.1),
+    ]
+)
+
+
+@tf.function
+def augment_layer(image, label):
+    return augment_layers(image, training=True), label
+
+
+# Cutmix Augmentation
+
+
+def box(lamda):
+    r_x = tf.cast(
+        tfp.distributions.Uniform(
+            0.0, tf.cast(CONFIGURATION["IM_SIZE"] - 1, tf.float32)
+        ).sample(),
+        dtype=tf.int32,
+    )
+    r_y = tf.cast(
+        tfp.distributions.Uniform(
+            0.0, tf.cast(CONFIGURATION["IM_SIZE"] - 1, tf.float32)
+        ).sample(),
+        dtype=tf.int32,
+    )
+
+    r_w = tf.cast(CONFIGURATION["IM_SIZE"] * tf.math.sqrt(1 - lamda), dtype=tf.int32)
+    r_h = tf.cast(CONFIGURATION["IM_SIZE"] * tf.math.sqrt(1 - lamda), dtype=tf.int32)
+
+    r_x = tf.cast(
+        tf.clip_by_value(
+            tf.cast(r_x, tf.float32) - tf.cast(r_w, tf.float32) / 2,
+            0,
+            CONFIGURATION["IM_SIZE"],
+        ),
+        tf.int32,
+    )
+    r_y = tf.cast(
+        tf.clip_by_value(
+            tf.cast(r_y, tf.float32) - tf.cast(r_h, tf.float32) / 2,
+            0,
+            CONFIGURATION["IM_SIZE"],
+        ),
+        tf.int32,
+    )
+
+    x_b_r = tf.cast(
+        tf.clip_by_value(
+            tf.cast(r_x, tf.float32) + tf.cast(r_w, tf.float32) / 2,
+            0,
+            CONFIGURATION["IM_SIZE"],
+        ),
+        tf.int32,
+    )
+    y_b_r = tf.cast(
+        tf.clip_by_value(
+            tf.cast(r_y, tf.float32) + tf.cast(r_h, tf.float32) / 2,
+            0,
+            CONFIGURATION["IM_SIZE"],
+        ),
+        tf.int32,
+    )
+
+    r_w_final = x_b_r - r_x
+    r_w_final = tf.cond(
+        tf.equal(r_w_final, 0),
+        lambda: tf.constant(1, dtype=tf.int32),
+        lambda: r_w_final,
+    )
+
+    r_h_final = y_b_r - r_y
+    r_h_final = tf.cond(
+        tf.equal(r_h_final, 0),
+        lambda: tf.constant(1, dtype=tf.int32),
+        lambda: r_h_final,
+    )
+
+    return r_y, r_x, r_h_final, r_w_final
+
+
+def cutmix(train_dataset_1, train_dataset_2):
+    (image_1, label_1), (image_2, label_2) = train_dataset_1, train_dataset_2
+
+    lamda = tfp.distributions.Beta(0.2, 0.2).sample()
+
+    r_y, r_x, r_h, r_w = box(lamda)
+    crop_2 = tf.image.crop_to_bounding_box(image_2, r_y, r_x, r_h, r_w)
+    pad_2 = tf.image.pad_to_bounding_box(
+        crop_2, r_y, r_x, CONFIGURATION["IM_SIZE"], CONFIGURATION["IM_SIZE"]
+    )
+
+    crop_1 = tf.image.crop_to_bounding_box(image_1, r_y, r_x, r_h, r_w)
+    pad_1 = tf.image.pad_to_bounding_box(
+        crop_1, r_y, r_x, CONFIGURATION["IM_SIZE"], CONFIGURATION["IM_SIZE"]
+    )
+
+    image = image_1 - pad_1 + pad_2
+
+    lamda_mix = tf.cast(
+        1 - (r_h * r_w) / (CONFIGURATION["IM_SIZE"] * CONFIGURATION["IM_SIZE"]),
+        dtype=tf.float32,
+    )
+    mixed_label = lamda_mix * tf.cast(label_1, dtype=tf.float32) + (
+        1 - lamda_mix
+    ) * tf.cast(label_2, dtype=tf.float32)
+
+    return image, mixed_label
+
 
 # Dataset Prepration
 
-training_dataset = train_dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
+train_dataset_1 = train_dataset.map(
+    augment_layer, num_parallel_calls=tf.data.AUTOTUNE
+).prefetch(buffer_size=tf.data.AUTOTUNE)
+
+train_dataset_2 = train_dataset.map(
+    augment_layer, num_parallel_calls=tf.data.AUTOTUNE
+).prefetch(buffer_size=tf.data.AUTOTUNE)
+
+mixed_dataset = tf.data.Dataset.zip((train_dataset_1, train_dataset_2))
+
+training_dataset = mixed_dataset.map(
+    cutmix, num_parallel_calls=tf.data.AUTOTUNE
+).prefetch(tf.data.AUTOTUNE)
+
+
 validation_dataset = val_dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
 
 
@@ -178,17 +317,45 @@ plt.show()
 
 lenet_model.evaluate(validation_dataset)
 
-test_image = cv2.imread("kaggle\test\happy\PrivateTest_218533.jpg")
-im = tf.constant(test_image, dtype=tf.float32)
 
-im = tf.expand_dims(im, axis=0)
-
-print(lenet_model(im))
-
-
-from tensorflow.keras.models import load_model
-from tensorflow.keras.layers import Resizing, Rescaling
+# load the saved model
 
 lenet_model = load_model(
     "lenet_model.h5", custom_objects={"Resizing": Resizing, "Rescaling": Rescaling}
 )
+
+test_image = cv2.imread("kaggle/test/fear/PrivateTest_134207.jpg")
+im = tf.constant(test_image, dtype=tf.float32)
+
+im = tf.expand_dims(im, axis=0)
+
+print(CLASS_NAMES[tf.argmax(lenet_model(im), axis=-1).numpy()[0]])
+
+
+# Confusion Matrix
+
+pridicted = []
+labels = []
+
+for im, label in validation_dataset:
+    pridicted.append(lenet_model(im))
+    labels.append(label.numpy())
+
+    print(np.argmax(labels[:-1], axis=-1).flatten())
+    print(np.argmax(pridicted[:-1], axis=-1).flatten())
+
+pred = np.argmax(pridicted[:-1], axis=-1).flatten()
+lab = np.argmax(labels[:-1], axis=-1).flatten()
+
+cm = confusion_matrix(lab, pred, labels=np.arange(len(CLASS_NAMES)))
+print(cm)
+sns.heatmap(
+    cm,
+    annot=True,
+    fmt="d",
+    cmap="Blues",
+    cbar=False,
+)
+plt.title("Confusion Matrix - {}".format(threshold))
+plt.ylabel("Actual")
+plt.xlabel("Predicted")
